@@ -1,0 +1,13 @@
+build/
+dist/
+*.obj
+*.o
+*.res
+*.exe
+*.user
+*.suo
+.vs/
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+config.ini
