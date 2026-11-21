@@ -1,6 +1,7 @@
 #include "autostart.h"
 #include "config.h"
 #include "overlay.h"
+#include "print_dialog.h"
 #include "settings_window.h"
 
 #include <windows.h>
@@ -22,14 +23,12 @@ constexpr UINT ID_APP_ICON = 101;
 constexpr UINT ID_TRAY_HEADER = 1000;
 constexpr UINT ID_TRAY_SETTINGS = 1001;
 constexpr UINT ID_TRAY_TOGGLE_VISIBLE = 1002;
-constexpr UINT ID_TRAY_ALL_MONITORS = 1003;
-constexpr UINT ID_TRAY_AUTOSTART = 1004;
 constexpr UINT ID_TRAY_EXIT = 1006;
-constexpr UINT ID_TRAY_PRESET_BASE = 1100;
 
 HINSTANCE g_hInstance = nullptr;
 OverlayManager g_overlay;
 SettingsWindow g_settingsWindow;
+PrintDialog g_printDialog;
 OverlayConfig g_config;
 std::wstring g_configPath;
 std::wstring g_lastRenderedClockKey;
@@ -65,11 +64,21 @@ void ReloadConfigAndRebuild() {
     g_overlay.Rebuild(g_config);
 }
 
-void ApplyPresetAndSave(StylePreset preset) {
-    g_config = MakePresetConfig(preset, g_config);
-    SaveConfig(g_configPath, g_config);
+void ApplyLiveOverlay(const OverlayConfig& cfg) {
+    bool monitorsChanged = (cfg.allMonitors != g_config.allMonitors);
+    g_config = cfg;
     UpdateClockKey();
-    g_overlay.Rebuild(g_config);
+    if (monitorsChanged) {
+        g_overlay.Rebuild(g_config);
+    } else {
+        g_overlay.UpdateContent(g_config);
+    }
+    g_printDialog.UpdateStyle(g_config);
+}
+
+void OpenPrintDialog() {
+    HICON hIcon = g_appIconBig ? g_appIconBig : g_trayIcon;
+    g_printDialog.Open(g_hInstance, hIcon, g_config);
 }
 
 void OpenSettingsDialog() {
@@ -80,15 +89,32 @@ void OpenSettingsDialog() {
         g_config,
         IsAutoStartEnabled(kAppName),
         [](const OverlayConfig& previewCfg) {
-            g_overlay.Rebuild(previewCfg);
+            ApplyLiveOverlay(previewCfg);
         },
         [](const OverlayConfig& newCfg, bool autoStart) {
-            g_config = newCfg;
+            ApplyLiveOverlay(newCfg);
             SaveConfig(g_configPath, g_config);
             SetAutoStartEnabled(kAppName, autoStart);
-            UpdateClockKey();
-            g_overlay.Rebuild(g_config);
+        },
+        []() {
+            g_overlay.SetDragEnabled(false);
+        },
+        []() {
+            OpenPrintDialog();
         });
+
+    if (g_settingsWindow.GetHandle()) {
+        g_overlay.SetDragEnabled(true, [](OverlayPosition pos, int marginX, int marginY, bool finished) {
+            g_config.position = pos;
+            g_config.marginX = marginX;
+            g_config.marginY = marginY;
+            g_settingsWindow.SyncPositionFromExternal(pos, marginX, marginY);
+            g_overlay.UpdateContent(g_config);
+            if (finished) {
+                SaveConfig(g_configPath, g_config);
+            }
+        });
+    }
 }
 
 void AddTrayIcon(HWND hwnd) {
@@ -127,25 +153,8 @@ void ShowTrayMenu(HWND hwnd) {
     AppendMenuW(hMenu, MF_STRING, ID_TRAY_SETTINGS, L"C\u00E0i \u0111\u1EB7t...");
     SetMenuDefaultItem(hMenu, ID_TRAY_SETTINGS, FALSE);
 
-    HMENU hPresetMenu = CreatePopupMenu();
-    if (hPresetMenu) {
-        for (int i = 0; i < kPresetCount; ++i) {
-            auto preset = static_cast<StylePreset>(i);
-            AppendMenuW(hPresetMenu, MF_STRING, ID_TRAY_PRESET_BASE + static_cast<UINT>(i), GetPresetDisplayName(preset));
-        }
-        AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hPresetMenu), L"M\u1EABu giao di\u1EC7n");
-    }
-
-    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-
     UINT visibleFlags = MF_STRING | (g_overlay.IsVisible() ? MF_CHECKED : MF_UNCHECKED);
     AppendMenuW(hMenu, visibleFlags, ID_TRAY_TOGGLE_VISIBLE, L"Hi\u1EC3n th\u1ECB Overlay");
-
-    UINT allMonFlags = MF_STRING | (g_config.allMonitors ? MF_CHECKED : MF_UNCHECKED);
-    AppendMenuW(hMenu, allMonFlags, ID_TRAY_ALL_MONITORS, L"Hi\u1EC3n th\u1ECB tr\u00EAn t\u1EA5t c\u1EA3 m\u00E0n h\u00ECnh");
-
-    UINT autoStartFlags = MF_STRING | (IsAutoStartEnabled(kAppName) ? MF_CHECKED : MF_UNCHECKED);
-    AppendMenuW(hMenu, autoStartFlags, ID_TRAY_AUTOSTART, L"Kh\u1EDFi \u0111\u1ED9ng c\u00F9ng Windows");
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Tho\u00E1t");
@@ -181,10 +190,6 @@ LRESULT CALLBACK ControllerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
         case WM_COMMAND: {
             UINT cmdId = LOWORD(wParam);
-            if (cmdId >= ID_TRAY_PRESET_BASE && cmdId < ID_TRAY_PRESET_BASE + static_cast<UINT>(kPresetCount)) {
-                ApplyPresetAndSave(static_cast<StylePreset>(cmdId - ID_TRAY_PRESET_BASE));
-                return 0;
-            }
             switch (cmdId) {
                 case ID_TRAY_SETTINGS:
                     OpenSettingsDialog();
@@ -194,20 +199,9 @@ LRESULT CALLBACK ControllerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     g_overlay.SetVisible(!g_overlay.IsVisible());
                     return 0;
 
-                case ID_TRAY_ALL_MONITORS:
-                    g_config.allMonitors = !g_config.allMonitors;
-                    SaveAllMonitorsSetting(g_configPath, g_config.allMonitors);
-                    g_overlay.Rebuild(g_config);
-                    return 0;
-
-                case ID_TRAY_AUTOSTART: {
-                    bool currentlyEnabled = IsAutoStartEnabled(kAppName);
-                    SetAutoStartEnabled(kAppName, !currentlyEnabled);
-                    return 0;
-                }
-
                 case ID_TRAY_EXIT:
                     g_settingsWindow.Close();
+                    g_printDialog.Close();
                     DestroyWindow(hwnd);
                     return 0;
             }
@@ -228,13 +222,13 @@ LRESULT CALLBACK ControllerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             if (wParam == IDT_MAINTENANCE) {
                 g_overlay.EnsureTopMost();
 
-                if (!g_settingsWindow.GetHandle()) {
-                    std::wstring nowKey = FormatOverlayText(g_config.format, g_config.uppercase) + L"\n" +
-                                          FormatOverlayText(g_config.subText, g_config.uppercase);
-                    if (nowKey != g_lastRenderedClockKey) {
-                        g_lastRenderedClockKey = nowKey;
-                        g_overlay.UpdateContent(g_config);
-                    }
+                const OverlayConfig& activeCfg =
+                    g_settingsWindow.GetHandle() ? g_settingsWindow.GetDraftConfig() : g_config;
+                std::wstring nowKey = FormatOverlayText(activeCfg.format, activeCfg.uppercase) + L"\n" +
+                                      FormatOverlayText(activeCfg.subText, activeCfg.uppercase);
+                if (nowKey != g_lastRenderedClockKey) {
+                    g_lastRenderedClockKey = nowKey;
+                    g_overlay.UpdateContent(activeCfg);
                 }
                 return 0;
             }
@@ -249,6 +243,7 @@ LRESULT CALLBACK ControllerWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             KillTimer(hwnd, IDT_MAINTENANCE);
             KillTimer(hwnd, IDT_REBUILD_DEBOUNCE);
             g_settingsWindow.Close();
+            g_printDialog.Close();
             RemoveTrayIcon();
             PostQuitMessage(0);
             return 0;
@@ -334,12 +329,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPWSTR /*l
     g_configPath = GetConfigFilePath();
     ReloadConfigAndRebuild();
 
-    SetTimer(hController, IDT_MAINTENANCE, 2000, nullptr);
+    SetTimer(hController, IDT_MAINTENANCE, 1000, nullptr);
 
     MSG msg = {};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         HWND hSettings = g_settingsWindow.GetHandle();
         if (hSettings && IsDialogMessageW(hSettings, &msg)) {
+            continue;
+        }
+        HWND hPrint = g_printDialog.GetHandle();
+        if (hPrint && IsDialogMessageW(hPrint, &msg)) {
             continue;
         }
         TranslateMessage(&msg);

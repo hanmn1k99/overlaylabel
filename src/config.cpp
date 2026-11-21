@@ -152,7 +152,7 @@ OverlayConfig MakePresetConfig(StylePreset preset, const OverlayConfig& base) {
             cfg.textColor = RGB(255, 255, 255);
             cfg.opacity = 245;
             cfg.accentColor = RGB(0, 229, 255);
-            cfg.showStatusDot = true;
+            cfg.showStatusDot = false;
             cfg.shadow = true;
             cfg.shadowColor = RGB(0, 0, 0);
             cfg.background = true;
@@ -173,7 +173,7 @@ OverlayConfig MakePresetConfig(StylePreset preset, const OverlayConfig& base) {
             cfg.textColor = RGB(255, 247, 224);
             cfg.opacity = 245;
             cfg.accentColor = RGB(255, 184, 0);
-            cfg.showStatusDot = true;
+            cfg.showStatusDot = false;
             cfg.shadow = true;
             cfg.shadowColor = RGB(0, 0, 0);
             cfg.background = true;
@@ -194,7 +194,7 @@ OverlayConfig MakePresetConfig(StylePreset preset, const OverlayConfig& base) {
             cfg.textColor = RGB(255, 255, 255);
             cfg.opacity = 245;
             cfg.accentColor = RGB(255, 46, 85);
-            cfg.showStatusDot = true;
+            cfg.showStatusDot = false;
             cfg.shadow = true;
             cfg.shadowColor = RGB(0, 0, 0);
             cfg.background = true;
@@ -215,7 +215,7 @@ OverlayConfig MakePresetConfig(StylePreset preset, const OverlayConfig& base) {
             cfg.textColor = RGB(226, 255, 236);
             cfg.opacity = 245;
             cfg.accentColor = RGB(34, 211, 102);
-            cfg.showStatusDot = true;
+            cfg.showStatusDot = false;
             cfg.shadow = true;
             cfg.shadowColor = RGB(0, 0, 0);
             cfg.background = true;
@@ -236,7 +236,7 @@ OverlayConfig MakePresetConfig(StylePreset preset, const OverlayConfig& base) {
             cfg.textColor = RGB(255, 255, 255);
             cfg.opacity = 235;
             cfg.accentColor = RGB(56, 189, 248);
-            cfg.showStatusDot = true;
+            cfg.showStatusDot = false;
             cfg.shadow = true;
             cfg.shadowColor = RGB(0, 0, 0);
             cfg.background = true;
@@ -394,7 +394,8 @@ bool EnsureDefaultConfigExists(const std::wstring& path) {
         L"text_color=#FFFFFF\r\n"
         L"opacity=245\r\n"
         L"accent_color=#00E5FF\r\n"
-        L"show_status_dot=1\r\n"
+        L"show_status_dot=0\r\n"
+        L"logo_path=\r\n"
         L"shadow=1\r\n"
         L"shadow_color=#000000\r\n"
         L"background=1\r\n"
@@ -440,7 +441,8 @@ OverlayConfig LoadConfig(const std::wstring& path) {
     cfg.opacity = static_cast<BYTE>(ClampInt(static_cast<int>(GetPrivateProfileIntW(L"Style", L"opacity", 245, path.c_str())), 10, 255));
 
     cfg.accentColor = ParseHexColor(ReadIniString(path, L"Style", L"accent_color", L"#00E5FF"), RGB(0, 229, 255));
-    cfg.showStatusDot = GetPrivateProfileIntW(L"Style", L"show_status_dot", 1, path.c_str()) != 0;
+    cfg.showStatusDot = false;
+    cfg.logoPath = ReadIniString(path, L"Style", L"logo_path", L"");
 
     cfg.shadow = GetPrivateProfileIntW(L"Style", L"shadow", 1, path.c_str()) != 0;
     cfg.shadowColor = ParseHexColor(ReadIniString(path, L"Style", L"shadow_color", L"#000000"), RGB(0, 0, 0));
@@ -481,7 +483,8 @@ bool SaveConfig(const std::wstring& path, const OverlayConfig& cfg) {
     writeInt(L"Style", L"opacity", static_cast<int>(cfg.opacity));
 
     WritePrivateProfileStringW(L"Style", L"accent_color", FormatHexColor(cfg.accentColor).c_str(), path.c_str());
-    writeInt(L"Style", L"show_status_dot", cfg.showStatusDot ? 1 : 0);
+    writeInt(L"Style", L"show_status_dot", 0);
+    WritePrivateProfileStringW(L"Style", L"logo_path", cfg.logoPath.c_str(), path.c_str());
 
     writeInt(L"Style", L"shadow", cfg.shadow ? 1 : 0);
     WritePrivateProfileStringW(L"Style", L"shadow_color", FormatHexColor(cfg.shadowColor).c_str(), path.c_str());

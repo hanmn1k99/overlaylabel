@@ -48,7 +48,8 @@ struct OverlayConfig {
     BYTE opacity = 245;
 
     COLORREF accentColor = RGB(0, 229, 255);
-    bool showStatusDot = true;
+    bool showStatusDot = false;
+    std::wstring logoPath;
 
     bool shadow = true;
     COLORREF shadowColor = RGB(0, 0, 0);

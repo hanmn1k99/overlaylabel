@@ -2,7 +2,7 @@
 ; Build with Inno Setup 6 (ISCC.exe)
 
 #define MyAppName "Overlay Label"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "minhhan.net"
 #define MyAppURL "https://minhhan.net"
 #define MyAppExeName "OverlayLabel.exe"
@@ -15,8 +15,8 @@ AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
-VersionInfoVersion=1.0.0.0
-VersionInfoProductVersion=1.0.0.0
+VersionInfoVersion=1.1.0.0
+VersionInfoProductVersion=1.1.0.0
 VersionInfoProductName={#MyAppName}
 VersionInfoDescription={#MyAppName} Setup
 VersionInfoCompany={#MyAppPublisher}

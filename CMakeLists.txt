@@ -11,6 +11,8 @@ set(SOURCES
     src/autostart.cpp
     src/overlay.cpp
     src/settings_window.cpp
+    src/label_printer.cpp
+    src/print_dialog.cpp
 )
 
 if(WIN32)
@@ -47,4 +49,5 @@ target_link_libraries(OverlayLabel PRIVATE
     advapi32
     comctl32
     comdlg32
+    ole32
 )

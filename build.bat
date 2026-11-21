@@ -68,10 +68,10 @@ rc /nologo /fo build\app.res resources\app.rc
 if errorlevel 1 exit /b 1
 
 cl /nologo /std:c++17 /O2 /MT /W4 /utf-8 /EHsc /DUNICODE /D_UNICODE ^
-    src\main.cpp src\config.cpp src\autostart.cpp src\overlay.cpp src\settings_window.cpp ^
+    src\main.cpp src\config.cpp src\autostart.cpp src\overlay.cpp src\settings_window.cpp src\label_printer.cpp src\print_dialog.cpp ^
     build\app.res ^
     /Fo:build\ /Fe:build\OverlayLabel.exe ^
-    /link /SUBSYSTEM:WINDOWS /MANIFEST:NO user32.lib gdi32.lib gdiplus.lib shell32.lib advapi32.lib comctl32.lib comdlg32.lib
+    /link /SUBSYSTEM:WINDOWS /MANIFEST:NO user32.lib gdi32.lib gdiplus.lib shell32.lib advapi32.lib comctl32.lib comdlg32.lib ole32.lib
 if errorlevel 1 exit /b 1
 
 echo [SUCCESS] Built: %cd%\build\OverlayLabel.exe
@@ -83,10 +83,10 @@ echo [BUILD] Compiling with MinGW-w64...
 if errorlevel 1 exit /b 1
 
 "%GPP%" -std=c++17 -O2 -s -Wall -Wextra -DUNICODE -D_UNICODE -municode -mwindows ^
-    src\main.cpp src\config.cpp src\autostart.cpp src\overlay.cpp src\settings_window.cpp build\app.res ^
+    src\main.cpp src\config.cpp src\autostart.cpp src\overlay.cpp src\settings_window.cpp src\label_printer.cpp src\print_dialog.cpp build\app.res ^
     -o build\OverlayLabel.exe ^
     -static -static-libgcc -static-libstdc++ ^
-    -luser32 -lgdi32 -lgdiplus -lshell32 -ladvapi32 -lcomctl32 -lcomdlg32
+    -luser32 -lgdi32 -lgdiplus -lshell32 -ladvapi32 -lcomctl32 -lcomdlg32 -lole32
 if errorlevel 1 exit /b 1
 
 echo [SUCCESS] Built: %cd%\build\OverlayLabel.exe

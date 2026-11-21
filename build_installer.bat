@@ -26,5 +26,5 @@ if not exist dist mkdir dist
 "%ISCC%" installer\OverlayLabel.iss
 if errorlevel 1 exit /b 1
 
-echo [SUCCESS] Installer created in: %cd%\dist\OverlayLabel-Setup-1.0.0.exe
+echo [SUCCESS] Installer created in: %cd%\dist\OverlayLabel-Setup-1.1.0.exe
 exit /b 0

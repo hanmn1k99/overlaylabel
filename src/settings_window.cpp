@@ -30,9 +30,11 @@ constexpr int IDC_CHK_AUTOSTART = 2019;
 
 constexpr int IDC_COMBO_FRAME = 2020;
 constexpr int IDC_CHK_UPPER = 2021;
-constexpr int IDC_CHK_DOT = 2022;
 constexpr int IDC_EDIT_FONT = 2023;
 constexpr int IDC_BTN_FONT = 2024;
+constexpr int IDC_EDIT_LOGO = 2042;
+constexpr int IDC_BTN_LOGO = 2043;
+constexpr int IDC_BTN_CLEAR_LOGO = 2044;
 constexpr int IDC_SLIDER_FONTSIZE = 2025;
 constexpr int IDC_VAL_FONTSIZE = 2026;
 constexpr int IDC_BTN_TEXTCOLOR = 2027;
@@ -46,8 +48,10 @@ constexpr int IDC_BTN_BGCOLOR = 2034;
 constexpr int IDC_HINT_PREVIEW = 2037;
 
 constexpr int IDC_BTN_RESET = 2040;
+constexpr int IDC_BTN_OPEN_PRINT = 2041;
 constexpr int IDC_BTN_SAVE = IDOK;
 constexpr int IDC_BTN_CANCEL = IDCANCEL;
+constexpr UINT_PTR IDT_AUTOSAVE = 100;
 
 UINT GetPrimaryDpi() {
     HDC hdc = GetDC(nullptr);
@@ -121,7 +125,9 @@ void SettingsWindow::Open(HINSTANCE hInstance,
                           const OverlayConfig& currentConfig,
                           bool currentAutoStart,
                           PreviewCallback onPreview,
-                          SaveCallback onSave) {
+                          SaveCallback onSave,
+                          CloseCallback onClosed,
+                          PrintCallback onOpenPrint) {
     if (hwnd_ && IsWindow(hwnd_)) {
         ShowWindow(hwnd_, SW_RESTORE);
         SetForegroundWindow(hwnd_);
@@ -130,11 +136,15 @@ void SettingsWindow::Open(HINSTANCE hInstance,
 
     hInstance_ = hInstance;
     originalConfig_ = currentConfig;
+    originalAutoStart_ = currentAutoStart;
     draftConfig_ = currentConfig;
     draftAutoStart_ = currentAutoStart;
     onPreview_ = std::move(onPreview);
     onSave_ = std::move(onSave);
-    saved_ = false;
+    onClosed_ = std::move(onClosed);
+    onOpenPrint_ = std::move(onOpenPrint);
+    cancelled_ = false;
+    dirty_ = false;
     dpi_ = GetPrimaryDpi();
 
     ACTCTXW actCtx = {};
@@ -176,7 +186,7 @@ void SettingsWindow::Open(HINSTANCE hInstance,
     }
 
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    RECT rc = { 0, 0, S(484), S(672) };
+    RECT rc = { 0, 0, S(484), S(704) };
     AdjustWindowRectEx(&rc, style, FALSE, 0);
     int winW = rc.right - rc.left;
     int winH = rc.bottom - rc.top;
@@ -307,49 +317,54 @@ void SettingsWindow::CreateControls() {
     addCtrl(0, L"BUTTON", L"Ch\u1EA1y c\u00F9ng Windows", WS_TABSTOP | BS_AUTOCHECKBOX, 294, 328, 162, 22, IDC_CHK_AUTOSTART);
 
     // --- Group 2: Style ---
-    addCtrl(0, L"BUTTON", L"Giao di\u1EC7n & M\u00E0u s\u1EAFc", BS_GROUPBOX, 14, 372, 456, 244, 0, true);
+    addCtrl(0, L"BUTTON", L"Giao di\u1EC7n & M\u00E0u s\u1EAFc", BS_GROUPBOX, 14, 372, 456, 276, 0, true);
 
     addCtrl(0, L"STATIC", L"Ki\u1EC3u khung:", SS_LEFT, 28, 400, 92, 20, 0);
-    HWND hFrame = addCtrl(0, L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 126, 396, 176, 120, IDC_COMBO_FRAME);
+    HWND hFrame = addCtrl(0, L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 126, 396, 232, 120, IDC_COMBO_FRAME);
     SendMessageW(hFrame, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Cyber Qu\u00E1n n\u00E9t (V\u00E1t g\u00F3c)"));
     SendMessageW(hFrame, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Bo tr\u00F2n (Pill)"));
     SendMessageW(hFrame, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ch\u1EC9 ch\u1EEF (Kh\u00F4ng n\u1EC1n)"));
-    addCtrl(0, L"BUTTON", L"In hoa", WS_TABSTOP | BS_AUTOCHECKBOX, 312, 398, 62, 22, IDC_CHK_UPPER);
-    addCtrl(0, L"BUTTON", L"Online", WS_TABSTOP | BS_AUTOCHECKBOX, 382, 398, 74, 22, IDC_CHK_DOT);
+    addCtrl(0, L"BUTTON", L"In hoa", WS_TABSTOP | BS_AUTOCHECKBOX, 370, 398, 86, 22, IDC_CHK_UPPER);
 
     addCtrl(0, L"STATIC", L"Font ch\u1EEF:", SS_LEFT, 28, 434, 92, 20, 0);
     addCtrl(WS_EX_CLIENTEDGE, L"EDIT", L"", ES_READONLY | ES_AUTOHSCROLL, 126, 430, 224, 24, IDC_EDIT_FONT);
     addCtrl(0, L"BUTTON", L"Ch\u1ECDn font...", WS_TABSTOP | BS_PUSHBUTTON, 358, 429, 98, 26, IDC_BTN_FONT);
 
-    addCtrl(0, L"STATIC", L"K\u00EDch th\u01B0\u1EDBc:", SS_LEFT, 28, 468, 92, 20, 0);
-    HWND hFs = addCtrl(0, TRACKBAR_CLASSW, L"", WS_TABSTOP | TBS_HORZ | TBS_NOTICKS, 126, 464, 268, 26, IDC_SLIDER_FONTSIZE);
+    addCtrl(0, L"STATIC", L"Logo (\u1EA3nh):", SS_LEFT, 28, 468, 92, 20, 0);
+    addCtrl(WS_EX_CLIENTEDGE, L"EDIT", L"", ES_READONLY | ES_AUTOHSCROLL, 126, 464, 178, 24, IDC_EDIT_LOGO);
+    addCtrl(0, L"BUTTON", L"Ch\u1ECDn \u1EA3nh...", WS_TABSTOP | BS_PUSHBUTTON, 310, 463, 86, 26, IDC_BTN_LOGO);
+    addCtrl(0, L"BUTTON", L"X\u00F3a", WS_TABSTOP | BS_PUSHBUTTON, 402, 463, 54, 26, IDC_BTN_CLEAR_LOGO);
+
+    addCtrl(0, L"STATIC", L"K\u00EDch th\u01B0\u1EDBc:", SS_LEFT, 28, 502, 92, 20, 0);
+    HWND hFs = addCtrl(0, TRACKBAR_CLASSW, L"", WS_TABSTOP | TBS_HORZ | TBS_NOTICKS, 126, 498, 268, 26, IDC_SLIDER_FONTSIZE);
     SendMessageW(hFs, TBM_SETRANGE, TRUE, MAKELONG(50, 250));
-    addCtrl(0, L"STATIC", L"100%", SS_RIGHT, 398, 468, 58, 20, IDC_VAL_FONTSIZE);
+    addCtrl(0, L"STATIC", L"100%", SS_RIGHT, 398, 502, 58, 20, IDC_VAL_FONTSIZE);
 
-    addCtrl(0, L"STATIC", L"M\u00E0u ch\u1EEF:", SS_LEFT, 28, 502, 62, 20, 0);
-    addCtrl(0, L"BUTTON", L"", WS_TABSTOP | BS_OWNERDRAW, 94, 498, 78, 24, IDC_BTN_TEXTCOLOR);
-    addCtrl(0, L"STATIC", L"Vi\u1EC1n Neon:", SS_LEFT, 184, 502, 66, 20, 0);
-    addCtrl(0, L"BUTTON", L"", WS_TABSTOP | BS_OWNERDRAW, 254, 498, 78, 24, IDC_BTN_ACCENTCOLOR);
-    addCtrl(0, L"BUTTON", L"In \u0111\u1EADm", WS_TABSTOP | BS_AUTOCHECKBOX, 348, 500, 96, 22, IDC_CHK_BOLD);
+    addCtrl(0, L"STATIC", L"M\u00E0u ch\u1EEF:", SS_LEFT, 28, 536, 62, 20, 0);
+    addCtrl(0, L"BUTTON", L"", WS_TABSTOP | BS_OWNERDRAW, 94, 532, 78, 24, IDC_BTN_TEXTCOLOR);
+    addCtrl(0, L"STATIC", L"Vi\u1EC1n Neon:", SS_LEFT, 184, 536, 66, 20, 0);
+    addCtrl(0, L"BUTTON", L"", WS_TABSTOP | BS_OWNERDRAW, 254, 532, 78, 24, IDC_BTN_ACCENTCOLOR);
+    addCtrl(0, L"BUTTON", L"In \u0111\u1EADm", WS_TABSTOP | BS_AUTOCHECKBOX, 348, 534, 96, 22, IDC_CHK_BOLD);
 
-    addCtrl(0, L"STATIC", L"M\u00E0u n\u1EC1n:", SS_LEFT, 28, 534, 62, 20, 0);
-    addCtrl(0, L"BUTTON", L"", WS_TABSTOP | BS_OWNERDRAW, 94, 530, 78, 24, IDC_BTN_BGCOLOR);
-    addCtrl(0, L"BUTTON", L"\u0110\u1ED5 b\u00F3ng:", WS_TABSTOP | BS_AUTOCHECKBOX, 184, 532, 68, 22, IDC_CHK_SHADOW);
-    addCtrl(0, L"BUTTON", L"", WS_TABSTOP | BS_OWNERDRAW, 254, 530, 78, 24, IDC_BTN_SHADOWCOLOR);
+    addCtrl(0, L"STATIC", L"M\u00E0u n\u1EC1n:", SS_LEFT, 28, 568, 62, 20, 0);
+    addCtrl(0, L"BUTTON", L"", WS_TABSTOP | BS_OWNERDRAW, 94, 564, 78, 24, IDC_BTN_BGCOLOR);
+    addCtrl(0, L"BUTTON", L"\u0110\u1ED5 b\u00F3ng:", WS_TABSTOP | BS_AUTOCHECKBOX, 184, 566, 68, 22, IDC_CHK_SHADOW);
+    addCtrl(0, L"BUTTON", L"", WS_TABSTOP | BS_OWNERDRAW, 254, 564, 78, 24, IDC_BTN_SHADOWCOLOR);
 
-    addCtrl(0, L"STATIC", L"\u0110\u1ED9 trong su\u1ED1t:", SS_LEFT, 28, 568, 92, 20, 0);
-    HWND hOp = addCtrl(0, TRACKBAR_CLASSW, L"", WS_TABSTOP | TBS_HORZ | TBS_NOTICKS, 126, 564, 268, 26, IDC_SLIDER_OPACITY);
+    addCtrl(0, L"STATIC", L"\u0110\u1ED9 trong su\u1ED1t:", SS_LEFT, 28, 602, 92, 20, 0);
+    HWND hOp = addCtrl(0, TRACKBAR_CLASSW, L"", WS_TABSTOP | TBS_HORZ | TBS_NOTICKS, 126, 598, 268, 26, IDC_SLIDER_OPACITY);
     SendMessageW(hOp, TBM_SETRANGE, TRUE, MAKELONG(0, 90));
-    addCtrl(0, L"STATIC", L"4%", SS_RIGHT, 398, 568, 58, 20, IDC_VAL_OPACITY);
+    addCtrl(0, L"STATIC", L"4%", SS_RIGHT, 398, 602, 58, 20, IDC_VAL_OPACITY);
 
     addCtrl(0, L"STATIC",
-            L"M\u1ECDi thay \u0111\u1ED5i \u0111\u01B0\u1EE3c xem tr\u01B0\u1EDBc tr\u1EF1c ti\u1EBFp tr\u00EAn m\u00E0n h\u00ECnh.",
-            SS_LEFTNOWORDWRAP, 28, 594, 428, 18, IDC_HINT_PREVIEW);
+            L"M\u1ECDi thay \u0111\u1ED5i \u0111\u01B0\u1EE3c t\u1EF1 \u0111\u1ED9ng l\u01B0u v\u00E0 xem tr\u01B0\u1EDBc tr\u1EF1c ti\u1EBFp.",
+            SS_LEFTNOWORDWRAP, 28, 628, 428, 18, IDC_HINT_PREVIEW);
 
     // --- Bottom Buttons ---
-    addCtrl(0, L"BUTTON", L"M\u1EB7c \u0111\u1ECBnh", WS_TABSTOP | BS_PUSHBUTTON, 14, 628, 104, 32, IDC_BTN_RESET);
-    addCtrl(0, L"BUTTON", L"L\u01B0u", WS_TABSTOP | BS_DEFPUSHBUTTON, 272, 628, 94, 32, IDC_BTN_SAVE);
-    addCtrl(0, L"BUTTON", L"H\u1EE7y", WS_TABSTOP | BS_PUSHBUTTON, 376, 628, 94, 32, IDC_BTN_CANCEL);
+    addCtrl(0, L"BUTTON", L"M\u1EB7c \u0111\u1ECBnh", WS_TABSTOP | BS_PUSHBUTTON, 14, 660, 94, 32, IDC_BTN_RESET);
+    addCtrl(0, L"BUTTON", L"In nh\u00E3n (PDF)...", WS_TABSTOP | BS_PUSHBUTTON, 116, 660, 132, 32, IDC_BTN_OPEN_PRINT);
+    addCtrl(0, L"BUTTON", L"L\u01B0u", WS_TABSTOP | BS_DEFPUSHBUTTON, 272, 660, 94, 32, IDC_BTN_SAVE);
+    addCtrl(0, L"BUTTON", L"Tho\u00E1t", WS_TABSTOP | BS_PUSHBUTTON, 376, 660, 94, 32, IDC_BTN_CANCEL);
 }
 
 void SettingsWindow::SyncControlsFromDraft() {
@@ -367,7 +382,6 @@ void SettingsWindow::SyncControlsFromDraft() {
 
     SendDlgItemMessageW(hwnd_, IDC_COMBO_FRAME, CB_SETCURSEL, FrameStyleToIndex(draftConfig_.frameStyle), 0);
     CheckDlgButton(hwnd_, IDC_CHK_UPPER, draftConfig_.uppercase ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(hwnd_, IDC_CHK_DOT, draftConfig_.showStatusDot ? BST_CHECKED : BST_UNCHECKED);
 
     SendDlgItemMessageW(hwnd_, IDC_SLIDER_FONTSIZE, TBM_SETPOS, TRUE, draftConfig_.scalePercent);
     CheckDlgButton(hwnd_, IDC_CHK_BOLD, draftConfig_.bold ? BST_CHECKED : BST_UNCHECKED);
@@ -405,6 +419,16 @@ void SettingsWindow::UpdateValueLabels() {
     }
     SetDlgItemTextW(hwnd_, IDC_EDIT_FONT, fontDesc.c_str());
 
+    if (draftConfig_.logoPath.empty()) {
+        SetDlgItemTextW(hwnd_, IDC_EDIT_LOGO, L"(Kh\u00F4ng c\u00F3)");
+    } else {
+        size_t slash = draftConfig_.logoPath.find_last_of(L"\\/");
+        std::wstring fileName = (slash == std::wstring::npos)
+            ? draftConfig_.logoPath
+            : draftConfig_.logoPath.substr(slash + 1);
+        SetDlgItemTextW(hwnd_, IDC_EDIT_LOGO, fileName.c_str());
+    }
+
     std::swprintf(buf, 64, L"%d%%", draftConfig_.scalePercent);
     SetDlgItemTextW(hwnd_, IDC_VAL_FONTSIZE, buf);
 
@@ -420,11 +444,54 @@ void SettingsWindow::UpdateEnabledStates() {
     EnableWindow(GetDlgItem(hwnd_, IDC_BTN_SHADOWCOLOR), draftConfig_.shadow ? TRUE : FALSE);
     EnableWindow(GetDlgItem(hwnd_, IDC_BTN_BGCOLOR), hasBg ? TRUE : FALSE);
     EnableWindow(GetDlgItem(hwnd_, IDC_BTN_ACCENTCOLOR), (hasBg || !draftConfig_.subText.empty()) ? TRUE : FALSE);
+    EnableWindow(GetDlgItem(hwnd_, IDC_BTN_CLEAR_LOGO), !draftConfig_.logoPath.empty() ? TRUE : FALSE);
 }
 
-void SettingsWindow::NotifyPreview() {
+void SettingsWindow::SyncPositionFromExternal(OverlayPosition pos, int marginX, int marginY) {
+    draftConfig_.position = pos;
+    draftConfig_.marginX = marginX;
+    draftConfig_.marginY = marginY;
+
+    if (!hwnd_ || !IsWindow(hwnd_)) return;
+
+    syncing_ = true;
+    SendDlgItemMessageW(hwnd_, IDC_COMBO_POS, CB_SETCURSEL, PositionToIndex(draftConfig_.position), 0);
+    int sliderX = marginX > 200 ? 200 : (marginX < 0 ? 0 : marginX);
+    int sliderY = marginY > 200 ? 200 : (marginY < 0 ? 0 : marginY);
+    SendDlgItemMessageW(hwnd_, IDC_SLIDER_MX, TBM_SETPOS, TRUE, sliderX);
+    SendDlgItemMessageW(hwnd_, IDC_SLIDER_MY, TBM_SETPOS, TRUE, sliderY);
+    UpdateValueLabels();
+    syncing_ = false;
+}
+
+void SettingsWindow::NotifyPreview(bool immediateSave) {
     if (onPreview_) {
         onPreview_(draftConfig_);
+    }
+    if (immediateSave) {
+        dirty_ = true;
+        FlushAutoSave();
+    } else {
+        ScheduleAutoSave();
+    }
+}
+
+void SettingsWindow::ScheduleAutoSave() {
+    dirty_ = true;
+    if (hwnd_ && IsWindow(hwnd_)) {
+        SetTimer(hwnd_, IDT_AUTOSAVE, 180, nullptr);
+    } else {
+        FlushAutoSave();
+    }
+}
+
+void SettingsWindow::FlushAutoSave() {
+    if (hwnd_ && IsWindow(hwnd_)) {
+        KillTimer(hwnd_, IDT_AUTOSAVE);
+    }
+    if (dirty_ && onSave_) {
+        dirty_ = false;
+        onSave_(draftConfig_, draftAutoStart_);
     }
 }
 
@@ -468,6 +535,23 @@ void SettingsWindow::PickFont() {
         if (pt > 72) pt = 72;
         draftConfig_.fontSize = pt;
         draftConfig_.bold = (lf.lfWeight >= FW_SEMIBOLD);
+        SyncControlsFromDraft();
+        NotifyPreview();
+    }
+}
+
+void SettingsWindow::PickLogo() {
+    wchar_t filePath[MAX_PATH] = {};
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFilter = L"Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.ico)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.ico\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = filePath;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+
+    if (GetOpenFileNameW(&ofn)) {
+        draftConfig_.logoPath = filePath;
         SyncControlsFromDraft();
         NotifyPreview();
     }
@@ -545,6 +629,13 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
         }
 
+        case WM_TIMER:
+            if (wParam == IDT_AUTOSAVE) {
+                FlushAutoSave();
+                return 0;
+            }
+            break;
+
         case WM_HSCROLL: {
             if (syncing_) return 0;
             HWND hSlider = reinterpret_cast<HWND>(lParam);
@@ -566,7 +657,9 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 default: return 0;
             }
             UpdateValueLabels();
-            NotifyPreview();
+            WORD scrollCode = LOWORD(wParam);
+            bool finished = (scrollCode == TB_ENDTRACK || scrollCode == SB_ENDSCROLL);
+            NotifyPreview(finished);
             return 0;
         }
 
@@ -617,7 +710,7 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         wchar_t buf[256] = {};
                         GetDlgItemTextW(hwnd_, IDC_EDIT_FORMAT, buf, 256);
                         draftConfig_.format = buf;
-                        NotifyPreview();
+                        NotifyPreview(false);
                     }
                     return 0;
 
@@ -628,7 +721,7 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                         draftConfig_.subText = buf;
                         UpdateEnabledStates();
                         InvalidateRect(GetDlgItem(hwnd_, IDC_BTN_ACCENTCOLOR), nullptr, TRUE);
-                        NotifyPreview();
+                        NotifyPreview(false);
                     }
                     return 0;
 
@@ -657,8 +750,13 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     NotifyPreview();
                     return 0;
 
-                case IDC_CHK_DOT:
-                    draftConfig_.showStatusDot = (IsDlgButtonChecked(hwnd_, IDC_CHK_DOT) == BST_CHECKED);
+                case IDC_BTN_LOGO:
+                    PickLogo();
+                    return 0;
+
+                case IDC_BTN_CLEAR_LOGO:
+                    draftConfig_.logoPath.clear();
+                    SyncControlsFromDraft();
                     NotifyPreview();
                     return 0;
 
@@ -674,6 +772,8 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
                 case IDC_CHK_AUTOSTART:
                     draftAutoStart_ = (IsDlgButtonChecked(hwnd_, IDC_CHK_AUTOSTART) == BST_CHECKED);
+                    dirty_ = true;
+                    FlushAutoSave();
                     return 0;
 
                 case IDC_BTN_FONT:
@@ -727,15 +827,16 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                     NotifyPreview();
                     return 0;
 
-                case IDC_BTN_SAVE:
-                    saved_ = true;
-                    if (onSave_) {
-                        onSave_(draftConfig_, draftAutoStart_);
+                case IDC_BTN_OPEN_PRINT:
+                    FlushAutoSave();
+                    if (onOpenPrint_) {
+                        onOpenPrint_();
                     }
-                    DestroyWindow(hwnd_);
                     return 0;
 
+                case IDC_BTN_SAVE:
                 case IDC_BTN_CANCEL:
+                    FlushAutoSave();
                     DestroyWindow(hwnd_);
                     return 0;
             }
@@ -743,12 +844,14 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_CLOSE:
+            FlushAutoSave();
             DestroyWindow(hwnd_);
             return 0;
 
         case WM_DESTROY:
-            if (!saved_ && onPreview_) {
-                onPreview_(originalConfig_);
+            KillTimer(hwnd_, IDT_AUTOSAVE);
+            if (!cancelled_) {
+                FlushAutoSave();
             }
             if (hFont_) {
                 DeleteObject(hFont_);
@@ -759,6 +862,10 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 hBoldFont_ = nullptr;
             }
             hwnd_ = nullptr;
+            if (onClosed_) {
+                auto cb = std::move(onClosed_);
+                cb();
+            }
             return 0;
     }
 

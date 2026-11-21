@@ -4,6 +4,7 @@
 #include <gdiplus.h>
 #include <cmath>
 #include <cstring>
+#include <memory>
 
 namespace {
 
@@ -100,6 +101,12 @@ void OverlayManager::Shutdown() {
 }
 
 void OverlayManager::DestroyAllWindows() {
+    if (draggingHwnd_) {
+        if (GetCapture() == draggingHwnd_) {
+            ReleaseCapture();
+        }
+        draggingHwnd_ = nullptr;
+    }
     for (const auto& inst : windows_) {
         if (inst.hwnd && IsWindow(inst.hwnd)) {
             DestroyWindow(inst.hwnd);
@@ -108,17 +115,187 @@ void OverlayManager::DestroyAllWindows() {
     windows_.clear();
 }
 
+const OverlayManager::OverlayInstance* OverlayManager::FindInstance(HWND hwnd) const {
+    for (const auto& inst : windows_) {
+        if (inst.hwnd == hwnd) {
+            return &inst;
+        }
+    }
+    return nullptr;
+}
+
+void OverlayManager::ApplyDragStyleToWindow(HWND hwnd) {
+    if (!hwnd || !IsWindow(hwnd)) return;
+    LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if (dragEnabled_) {
+        exStyle &= ~static_cast<LONG_PTR>(WS_EX_TRANSPARENT);
+    } else {
+        exStyle |= static_cast<LONG_PTR>(WS_EX_TRANSPARENT);
+    }
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle);
+    SetWindowPos(
+        hwnd, nullptr, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+void OverlayManager::SetDragEnabled(bool enabled, DragCallback onDragged) {
+    dragEnabled_ = enabled;
+    onDragged_ = std::move(onDragged);
+    if (!dragEnabled_ && draggingHwnd_) {
+        if (GetCapture() == draggingHwnd_) {
+            ReleaseCapture();
+        }
+        draggingHwnd_ = nullptr;
+    }
+    for (const auto& inst : windows_) {
+        ApplyDragStyleToWindow(inst.hwnd);
+    }
+}
+
 LRESULT CALLBACK OverlayManager::OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    OverlayManager* self = nullptr;
+    if (msg == WM_NCCREATE) {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        self = reinterpret_cast<OverlayManager*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+    } else {
+        self = reinterpret_cast<OverlayManager*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    }
+
+    if (self) {
+        return self->HandleOverlayMessage(hwnd, msg, wParam, lParam);
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+LRESULT OverlayManager::HandleOverlayMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_NCHITTEST:
-            return HTTRANSPARENT;
+            return dragEnabled_ ? HTCLIENT : HTTRANSPARENT;
+
+        case WM_SETCURSOR:
+            if (dragEnabled_) {
+                SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
+                return TRUE;
+            }
+            break;
+
         case WM_MOUSEACTIVATE:
             return MA_NOACTIVATE;
+
         case WM_ERASEBKGND:
             return 1;
-        default:
-            return DefWindowProcW(hwnd, msg, wParam, lParam);
+
+        case WM_LBUTTONDOWN:
+            if (dragEnabled_) {
+                draggingHwnd_ = hwnd;
+                GetCursorPos(&dragStartCursor_);
+                GetWindowRect(hwnd, &dragStartRect_);
+                lastDragPos_ = lastConfig_.position;
+                lastDragMarginX_ = lastConfig_.marginX;
+                lastDragMarginY_ = lastConfig_.marginY;
+                SetCapture(hwnd);
+                return 0;
+            }
+            break;
+
+        case WM_MOUSEMOVE:
+            if (dragEnabled_ && draggingHwnd_ == hwnd) {
+                const OverlayInstance* inst = FindInstance(hwnd);
+                if (!inst) return 0;
+
+                POINT cur = {};
+                GetCursorPos(&cur);
+
+                int wndW = dragStartRect_.right - dragStartRect_.left;
+                int wndH = dragStartRect_.bottom - dragStartRect_.top;
+                int newX = dragStartRect_.left + (cur.x - dragStartCursor_.x);
+                int newY = dragStartRect_.top + (cur.y - dragStartCursor_.y);
+
+                const RECT& bounds = lastConfig_.respectTaskbar ? inst->target.workArea : inst->target.monitorArea;
+                if (newX < bounds.left) newX = bounds.left;
+                if (newY < bounds.top) newY = bounds.top;
+                if (newX + wndW > bounds.right) newX = bounds.right - wndW;
+                if (newY + wndH > bounds.bottom) newY = bounds.bottom - wndH;
+
+                SetWindowPos(
+                    hwnd, HWND_TOPMOST, newX, newY, 0, 0,
+                    SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+
+                int midX = (bounds.left + bounds.right) / 2;
+                int midY = (bounds.top + bounds.bottom) / 2;
+                int cx = newX + wndW / 2;
+                int cy = newY + wndH / 2;
+                bool isRight = (cx >= midX);
+                bool isBottom = (cy >= midY);
+
+                OverlayPosition pos = OverlayPosition::TopRight;
+                int rawMx = 0;
+                int rawMy = 0;
+                if (!isBottom && isRight) {
+                    pos = OverlayPosition::TopRight;
+                    rawMx = bounds.right - (newX + wndW);
+                    rawMy = newY - bounds.top;
+                } else if (!isBottom && !isRight) {
+                    pos = OverlayPosition::TopLeft;
+                    rawMx = newX - bounds.left;
+                    rawMy = newY - bounds.top;
+                } else if (isBottom && isRight) {
+                    pos = OverlayPosition::BottomRight;
+                    rawMx = bounds.right - (newX + wndW);
+                    rawMy = bounds.bottom - (newY + wndH);
+                } else {
+                    pos = OverlayPosition::BottomLeft;
+                    rawMx = newX - bounds.left;
+                    rawMy = bounds.bottom - (newY + wndH);
+                }
+
+                float dpiScale = static_cast<float>(GetMonitorDpi(inst->target.hMonitor)) / 96.0f;
+                int mx = static_cast<int>(std::round(static_cast<float>(rawMx) / dpiScale));
+                int my = static_cast<int>(std::round(static_cast<float>(rawMy) / dpiScale));
+                if (mx < 0) mx = 0;
+                if (mx > 500) mx = 500;
+                if (my < 0) my = 0;
+                if (my > 500) my = 500;
+
+                lastDragPos_ = pos;
+                lastDragMarginX_ = mx;
+                lastDragMarginY_ = my;
+                lastConfig_.position = pos;
+                lastConfig_.marginX = mx;
+                lastConfig_.marginY = my;
+
+                if (onDragged_) {
+                    onDragged_(pos, mx, my, false);
+                }
+                return 0;
+            }
+            break;
+
+        case WM_LBUTTONUP:
+            if (draggingHwnd_ == hwnd) {
+                draggingHwnd_ = nullptr;
+                if (GetCapture() == hwnd) {
+                    ReleaseCapture();
+                }
+                if (onDragged_) {
+                    onDragged_(lastDragPos_, lastDragMarginX_, lastDragMarginY_, true);
+                }
+                return 0;
+            }
+            break;
+
+        case WM_CAPTURECHANGED:
+            if (draggingHwnd_ == hwnd) {
+                draggingHwnd_ = nullptr;
+                if (onDragged_) {
+                    onDragged_(lastDragPos_, lastDragMarginX_, lastDragMarginY_, true);
+                }
+                return 0;
+            }
+            break;
     }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 BOOL CALLBACK OverlayManager::EnumMonitorsProc(HMONITOR hMonitor, HDC /*hdc*/, LPRECT /*lprcMonitor*/, LPARAM dwData) {
@@ -160,12 +337,14 @@ UINT OverlayManager::GetMonitorDpi(HMONITOR hMonitor) {
 }
 
 HWND OverlayManager::CreateOverlayWindow() {
-    const DWORD exStyle =
+    DWORD exStyle =
         WS_EX_LAYERED |
-        WS_EX_TRANSPARENT |
         WS_EX_TOPMOST |
         WS_EX_TOOLWINDOW |
         WS_EX_NOACTIVATE;
+    if (!dragEnabled_) {
+        exStyle |= WS_EX_TRANSPARENT;
+    }
 
     return CreateWindowExW(
         exStyle,
@@ -176,7 +355,7 @@ HWND OverlayManager::CreateOverlayWindow() {
         nullptr,
         nullptr,
         hInstance_,
-        nullptr);
+        this);
 }
 
 void OverlayManager::RenderToWindow(HWND hwnd,
@@ -240,14 +419,35 @@ void OverlayManager::RenderToWindow(HWND hwnd,
     float shadowOffset = config.shadow ? (1.5f * scale) : 0.0f;
 
     float leftBarArea = isCyber ? (10.0f * scale) : 0.0f;
-    float dotSize = config.showStatusDot ? (7.5f * scale) : 0.0f;
-    float dotGap = config.showStatusDot ? (7.0f * scale) : 0.0f;
     float lineGap = hasSub ? (3.0f * scale) : 0.0f;
 
-    float row1W = hasSub ? ((config.showStatusDot ? (dotSize + dotGap) : 0.0f) + subBounds.Width) : 0.0f;
-    float row2W = (!hasSub && config.showStatusDot ? (dotSize + dotGap) : 0.0f) + mainBounds.Width;
-    float contentW = (row1W > row2W ? row1W : row2W) + shadowOffset;
-    float contentH = (hasSub ? (subBounds.Height + lineGap) : 0.0f) + mainBounds.Height + shadowOffset;
+    float textW = (hasSub && subBounds.Width > mainBounds.Width ? subBounds.Width : mainBounds.Width) + shadowOffset;
+    float textH = (hasSub ? (subBounds.Height + lineGap) : 0.0f) + mainBounds.Height + shadowOffset;
+
+    std::unique_ptr<Gdiplus::Image> logoImg;
+    float logoW = 0.0f;
+    float logoH = 0.0f;
+    float logoGap = 0.0f;
+    if (!config.logoPath.empty()) {
+        auto img = std::make_unique<Gdiplus::Image>(config.logoPath.c_str());
+        if (img->GetLastStatus() == Gdiplus::Ok && img->GetWidth() > 0 && img->GetHeight() > 0) {
+            float targetH = textH > (26.0f * scale) ? textH : (26.0f * scale);
+            float aspect = static_cast<float>(img->GetWidth()) / static_cast<float>(img->GetHeight());
+            float targetW = targetH * aspect;
+            float maxW = targetH * 2.2f;
+            if (targetW > maxW) {
+                targetW = maxW;
+                targetH = targetW / aspect;
+            }
+            logoW = targetW;
+            logoH = targetH;
+            logoGap = 10.0f * scale;
+            logoImg = std::move(img);
+        }
+    }
+
+    float contentW = (logoImg ? (logoW + logoGap) : 0.0f) + textW;
+    float contentH = textH > logoH ? textH : logoH;
 
     float panelW = leftBarArea + padX * 2.0f + contentW;
     float panelH = padY * 2.0f + contentH;
@@ -392,24 +592,29 @@ void OverlayManager::RenderToWindow(HWND hwnd,
         float contentX = px + leftBarArea + padX;
         float contentY = py + padY;
 
-        auto drawStatusDot = [&](float cx, float cy) {
-            // Soft emerald green halo + bright core
-            Gdiplus::SolidBrush halo(Gdiplus::Color(75, 34, 197, 94));
-            g.FillEllipse(&halo, cx - dotSize * 0.78f, cy - dotSize * 0.78f, dotSize * 1.56f, dotSize * 1.56f);
-            Gdiplus::SolidBrush core(Gdiplus::Color(255, 52, 232, 122));
-            g.FillEllipse(&core, cx - dotSize * 0.5f, cy - dotSize * 0.5f, dotSize, dotSize);
-        };
+        if (logoImg) {
+            float logoY = contentY + (contentH - logoH) * 0.5f;
+            Gdiplus::ImageAttributes ia;
+            ia.SetWrapMode(Gdiplus::WrapModeTileFlipXY);
+            g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            g.DrawImage(
+                logoImg.get(),
+                Gdiplus::RectF(contentX, logoY, logoW, logoH),
+                0.0f, 0.0f,
+                static_cast<float>(logoImg->GetWidth()),
+                static_cast<float>(logoImg->GetHeight()),
+                Gdiplus::UnitPixel,
+                &ia);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+            contentX += logoW + logoGap;
+        }
 
-        float mainY = contentY;
+        float textStartY = contentY + (contentH - textH) * 0.5f;
+        float mainY = textStartY;
         float mainX = contentX;
 
         if (hasSub) {
-            float subX = contentX;
-            if (config.showStatusDot) {
-                drawStatusDot(subX + dotSize * 0.5f, contentY + subBounds.Height * 0.52f);
-                subX += dotSize + dotGap;
-            }
-
             // Accent-tinted crisp sub-label
             BYTE subR = ClampByte((static_cast<int>(accR) * 55 + 255 * 45) / 100);
             BYTE subG = ClampByte((static_cast<int>(accG) * 55 + 255 * 45) / 100);
@@ -424,17 +629,14 @@ void OverlayManager::RenderToWindow(HWND hwnd,
                     GetBValue(config.shadowColor)));
                 g.DrawString(
                     subText.c_str(), -1, &subFont,
-                    Gdiplus::PointF(subX + 1.0f * scale, contentY + 1.0f * scale),
+                    Gdiplus::PointF(contentX + 1.0f * scale, textStartY + 1.0f * scale),
                     &stringFormat, &subShadow);
             }
 
             Gdiplus::SolidBrush subBrush(Gdiplus::Color(subAlpha, subR, subG, subB));
-            g.DrawString(subText.c_str(), -1, &subFont, Gdiplus::PointF(subX, contentY), &stringFormat, &subBrush);
+            g.DrawString(subText.c_str(), -1, &subFont, Gdiplus::PointF(contentX, textStartY), &stringFormat, &subBrush);
 
-            mainY = contentY + subBounds.Height + lineGap;
-        } else if (config.showStatusDot) {
-            drawStatusDot(mainX + dotSize * 0.5f, mainY + mainBounds.Height * 0.52f);
-            mainX += dotSize + dotGap;
+            mainY = textStartY + subBounds.Height + lineGap;
         }
 
         if (config.shadow) {
@@ -501,6 +703,7 @@ void OverlayManager::RenderToWindow(HWND hwnd,
 }
 
 void OverlayManager::Rebuild(const OverlayConfig& config) {
+    lastConfig_ = config;
     DestroyAllWindows();
 
     std::vector<MonitorTarget> monitors;
@@ -531,6 +734,7 @@ void OverlayManager::Rebuild(const OverlayConfig& config) {
 }
 
 void OverlayManager::UpdateContent(const OverlayConfig& config) {
+    lastConfig_ = config;
     if (windows_.empty()) {
         Rebuild(config);
         return;
@@ -541,6 +745,7 @@ void OverlayManager::UpdateContent(const OverlayConfig& config) {
 
     for (const auto& inst : windows_) {
         if (!inst.hwnd || !IsWindow(inst.hwnd)) continue;
+        if (inst.hwnd == draggingHwnd_) continue;
         RenderToWindow(inst.hwnd, inst.target, config, mainText, subText);
     }
 }
